@@ -1,69 +1,84 @@
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import classification_report, accuracy_score
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
-import xgboost as xgb
+import os
 import pandas as pd
 import numpy as np
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import classification_report
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from keras.preprocessing.image import load_img, img_to_array 
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import randint
 
-# Load data
-data = pd.read_csv("CancerBreast.csv")
 
-# Separate features and labels
-X = data.drop(columns="label", axis=1)
-y = data['label']
+def loadImages(dir, target_size=(128, 128)):
+    X = []
+    y = []
+    for label in ['0', '1']:
+        class_dir = os.path.join(dir, label)
+        if os.path.isdir(class_dir):
+            for img in os.listdir(class_dir):
+                img_path = os.path.join(class_dir, img)
+                try:
+                    img = load_img(img_path, target_size=target_size)
+                    imgArray = img_to_array(img)
+                    X.append(imgArray)
+                    y.append(int(label))
+                except Exception as e:
+                    print(f"Error loading image {img_path}: {e}")
+    return np.array(X), np.array(y)
+    
+trainDir = 'C:\\Users\\maait\\Desktop\\University\\Machine learning\\final\\train'
+validDir = 'C:\\Users\\maait\\Desktop\\University\\Machine learning\\final\\valid'
+testDir = 'C:\\Users\\maait\\Desktop\\University\\Machine learning\\final\\test'
 
-# Ensure all features are numeric and handle missing values
-X = X.select_dtypes(include=[np.number]).fillna(0)
+X_train, y_train = loadImages(trainDir)
+X_valid, y_valid = loadImages(validDir)
+X_test, y_test = loadImages(testDir)
 
-# Ensure y is a 1D array
-y = y.values.ravel() if hasattr(y, "values") else y
+X_train_flat = X_train.reshape(X_train.shape[0], -1) / 255.0
+X_valid_flat = X_valid.reshape(X_valid.shape[0], -1) / 255.0
+X_test_flat = X_test.reshape(X_test.shape[0], -1) / 255.0
 
-# Split the data into training and test sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-
-# Function to train and evaluate a model
-def train_and_evaluate(model, X_train, y_train, X_test, y_test, name="Model"):
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    print(f"{name} Classification Report:")
-    print(classification_report(y_test, y_pred))
-    return accuracy_score(y_test, y_pred)
-
-# 1. XGBoost with Hyperparameter Tuning
-xgb_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-xgb_params = {
-    'n_estimators': [50, 100, 200],
-    'max_depth': [3, 5, 7],
-    'learning_rate': [0.01, 0.1, 0.2]
+models = {
+    'KNeighborsClassifier': KNeighborsClassifier(),
+    'SVC': SVC(),
+    'DecisionTreeClassifier': DecisionTreeClassifier(),
+    'RandomForestClassifier': RandomForestClassifier()
 }
-xgb_grid = GridSearchCV(xgb_model, xgb_params, scoring='accuracy', cv=3)
-xgb_grid.fit(X_train, y_train)
-best_xgb = xgb_grid.best_estimator_
-xgb_acc = train_and_evaluate(best_xgb, X_train, y_train, X_test, y_test, name="XGBoost")
 
-# 2. Support Vector Machine (SVM)
-svm_model = SVC(kernel='linear', C=1)
-svm_acc = train_and_evaluate(svm_model, X_train, y_train, X_test, y_test, name="SVM")
-
-# 3. Decision Tree
-dt_model = DecisionTreeClassifier(max_depth=5, random_state=42)
-dt_acc = train_and_evaluate(dt_model, X_train, y_train, X_test, y_test, name="Decision Tree")
-
-# 4. Random Forest
-rf_model = RandomForestClassifier(n_estimators=100, max_depth=7, random_state=42)
-rf_acc = train_and_evaluate(rf_model, X_train, y_train, X_test, y_test, name="Random Forest")
-
-# 5. K-Nearest Neighbors (KNN)
-knn_model = KNeighborsClassifier(n_neighbors=5)
-knn_acc = train_and_evaluate(knn_model, X_train, y_train, X_test, y_test, name="KNN")
-
-# Summarize results
-print("\nModel Performance Summary:")
-print(f"XGBoost Accuracy: {xgb_acc}")
-print(f"SVM Accuracy: {svm_acc}")
-print(f"Decision Tree Accuracy: {dt_acc}")
-print(f"Random Forest Accuracy: {rf_acc}")
-print(f"KNN Accuracy: {knn_acc}")
+param_grids = {
+    'KNeighborsClassifier': {
+        'n_neighbors': randint(3, 10),
+        'weights': ['uniform', 'distance'],
+    },
+    'SVC': {
+        'C': [0.1, 1, 5],
+        'kernel': ['linear', 'rbf'],
+    },
+    'DecisionTreeClassifier': {
+        'max_depth': [None, 10, 20, 30],
+        'min_samples_split': [2, 5, 10],
+       
+    },
+    'RandomForestClassifier': {
+        'n_estimators': randint(100, 300),
+        'max_depth': [None, 10, 20, 30],
+       
+    }
+}
+for name, model in models.items():
+    print(f"Hyper-tuning {name}...")
+    random_search = RandomizedSearchCV(model, param_grids[name], cv=3, scoring='accuracy', verbose=1, n_jobs=-1, n_iter=10)
+    random_search.fit(X_train_flat, y_train)
+    best_model = random_search.best_estimator_
+    print(f"Best parameters for {name}: {random_search.best_params_}")
+    
+    y_pred_valid = best_model.predict(X_valid_flat)
+    print(f"Validation report for {name}:\n")
+    print(classification_report(y_valid, y_pred_valid))
+    
+    y_pred_test = best_model.predict(X_test_flat)
+    print(f"Test report for {name}:\n")
+    print(classification_report(y_test, y_pred_test))
